@@ -1,7 +1,10 @@
 from telegram.ext import Application, MessageHandler, filters, CommandHandler
 from telegram import ReplyKeyboardMarkup, KeyboardButton
-from googletrans import Translator
 
+from googletrans import Translator
+import sqlalchemy as sa
+import sqlalchemy.orm as orm
+from sqlalchemy.orm import Session
 import math
 import datetime
 from datetime import timezone, timedelta
@@ -9,6 +12,10 @@ import requests
 
 from dotenv import load_dotenv
 import os
+
+SqlAlchemyBase = orm.declarative_base()
+
+__factory = None
 
 load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -36,6 +43,23 @@ def get_keyboard():
     my_keboard = ReplyKeyboardMarkup([['🙏Помощь🙏'], [wether_button]], resize_keyboard=True)
     return my_keboard
 
+def global_init(db_file):
+    global __factory
+
+    if __factory:
+        return
+
+    if not db_file or not db_file.strip():
+        raise Exception("Необходимо указать файл базы данных.")
+
+    conn_str = f'sqlite:///{db_file.strip()}?check_same_thread=False'
+    print(f"Подключение к базе данных по адресу {conn_str}")
+
+    engine = sa.create_engine(conn_str, echo=False)
+    __factory = orm.sessionmaker(bind=engine)
+
+
+    SqlAlchemyBase.metadata.create_all(engine)
 
 async def start(update, context):
     """Отправляет сообщение когда получена команда /start"""

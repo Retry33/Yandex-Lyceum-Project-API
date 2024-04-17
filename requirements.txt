@@ -3,3 +3,4 @@ googletrans_py==4.0.0
 python-dotenv==1.0.1
 python-telegram-bot==21.1.1
 Requests==2.31.0
+httpx==0.27.0
