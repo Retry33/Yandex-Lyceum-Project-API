@@ -1,21 +1,17 @@
-from telegram.ext import Application, MessageHandler, filters, CommandHandler
+from telegram.ext import Application, MessageHandler, filters, CommandHandler, ConversationHandler
 from telegram import ReplyKeyboardMarkup, KeyboardButton
 
 from googletrans import Translator
-import sqlalchemy as sa
-import sqlalchemy.orm as orm
-from sqlalchemy.orm import Session
 import math
 import datetime
 from datetime import timezone, timedelta
 import requests
 
+from data import db_session
+from data.users import User
+
 from dotenv import load_dotenv
 import os
-
-SqlAlchemyBase = orm.declarative_base()
-
-__factory = None
 
 load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -34,32 +30,36 @@ code_to_smile = {
 translator = Translator()
 LANGUAGES = {
     'русского': 'ru', 'русский': 'ru',
-    'английского': 'en', 'английский': 'en'
+    'английского': 'en', 'английский': 'en',
+    'испанский': 'es', 'испанского': 'es',
+    'канадский': 'kn', 'канадского': 'kn',
+    'португальский': 'pt', 'португальского': 'pt',
+    'арабский': 'ar', 'арабского': 'ar',
+    'немецкий': 'de', 'немецкого': 'de',
+    'французский': 'fr', 'французского': 'fr',
+    'хинди': 'hi',
+    'греческий': 'el', 'греческого': 'el'
 }
 
 
-def get_keyboard():
+def get_keyboard_for_menu():
     wether_button = KeyboardButton('☀Моя погода☀', request_location=True)
-    my_keboard = ReplyKeyboardMarkup([['🙏Помощь🙏'], [wether_button]], resize_keyboard=True)
+    my_keboard = ReplyKeyboardMarkup([['🙏Помощь🙏'], [wether_button, '🌦Погода🌦'], ['🈳Переводчик🈳']],
+                                     resize_keyboard=True)
     return my_keboard
 
-def global_init(db_file):
-    global __factory
 
-    if __factory:
-        return
-
-    if not db_file or not db_file.strip():
-        raise Exception("Необходимо указать файл базы данных.")
-
-    conn_str = f'sqlite:///{db_file.strip()}?check_same_thread=False'
-    print(f"Подключение к базе данных по адресу {conn_str}")
-
-    engine = sa.create_engine(conn_str, echo=False)
-    __factory = orm.sessionmaker(bind=engine)
+def get_keyboard_for_translator():
+    my_keboard = ReplyKeyboardMarkup(
+        [['русский', 'английский'], ['испанский', 'канадский'], ['португальский', 'арабский'],
+         ['немецкий', 'французский'], ['хинди', 'греческого'], ['/stop']], resize_keyboard=True)
+    return my_keboard
 
 
-    SqlAlchemyBase.metadata.create_all(engine)
+def get_keyboard_for_text():
+    my_keboard = ReplyKeyboardMarkup([['/stop']], resize_keyboard=True)
+    return my_keboard
+
 
 async def start(update, context):
     """Отправляет сообщение когда получена команда /start"""
@@ -67,7 +67,7 @@ async def start(update, context):
     await update.message.reply_html(
         f"👋👋👋Привет {user.mention_html()}! Я бот-помошник для путешествий...\n\n\n❓Чтобы подробнее узнать о моих "
         f"функциях используйте команду /help или нажмите на кнопку «Помошь»❓.",
-        reply_markup=get_keyboard())
+        reply_markup=get_keyboard_for_menu())
 
 
 async def help_command(update, context):
@@ -75,15 +75,15 @@ async def help_command(update, context):
     await update.message.reply_html(
         "❗В данном сообщении вы можете узнать о всём функционале бота❗\n\n\n"
         "🔸<u><b>Карманный переводчик</b></u>\n"
-        "Чтобы получить перевод любого слова или фразы отправте мне собщение со следующим "
+        "Чтобы получить перевод любого слова или фразы отправьте мне сообщение со следующим "
         "содержанием:\n<b>Переведи с</b> <i>язык переводимой фразы</i> <b>на</b> <i>язык "
-        "результата</i> ...\nПример: Переведи с русского на английский Пирвет мир!\n\n\n"
+        "результата</i> ...\nПример: Переведи с русского на английский Привет мир!\n\n\n"
         "🔸<u><b>Синоптик</b></u>\n"
         "Если вы хотите узнать текущую погоду в городе вашего прибывания нажмите на кнопку "
         "«Моя погода», при этом в чат будет отправлена информация о вашей геолокации.\n\n"
-        "Если вас интересует погода в конкретном городе, то отправте мне собщение со "
+        "Если вас интересует погода в конкретном городе, то отправьте мне сообщение со "
         "следующим содержанием:\n<b>Погода в городе</b> <i>название города</i>\nПример: "
-        "Погода в городе Москва", reply_markup=get_keyboard())
+        "Погода в городе Москва", reply_markup=get_keyboard_for_menu())
 
 
 def wether(city):
@@ -133,7 +133,73 @@ async def my_wether(update, context):
         f'https://eu1.locationiq.com/v1/reverse.php?key={Geocoder_TOKEN}&lat={latitude}&lon={longitude[:-1]}'
         f'&format=json',
         headers=headers).json()
-    await update.message.reply_html(wether(address["address"].get("city")))
+    await update.message.reply_html(wether(address["address"].get("city")), reply_markup=get_keyboard_for_menu())
+
+
+# Начало диалога с переводчиком
+async def translation(update, context):
+    await update.message.reply_text("Введите текст для перевода.", reply_markup=get_keyboard_for_text())
+    return 1
+
+
+async def start_language(update, context):
+    context.user_data['text'] = update.message.text
+    await update.message.reply_text(
+        f"Введите начальный язык (с какого хотите перевести).", reply_markup=get_keyboard_for_translator())
+    return 2
+
+
+async def end_language(update, context):
+    context.user_data['src'] = update.message.text
+    await update.message.reply_text(
+        f"Введите конечный язык (на какой хотите перевести).", reply_markup=get_keyboard_for_translator())
+    return 3
+
+
+async def end_translation(update, context):
+    try:
+        src = LANGUAGES[context.user_data['src']]
+        dest = LANGUAGES[update.message.text]
+        text = context.user_data['text']
+
+        await update.message.reply_text(translator.translate(text, src=src, dest=dest).text,
+                                        reply_markup=get_keyboard_for_menu())
+        context.user_data.clear()
+        return ConversationHandler.END
+    except Exception as error:
+        print(error)
+        await update.message.reply_text(
+            "Соединение с сервером потеряно. Попробуйте ввести корректные названия языков или подождите немного",
+            reply_markup=get_keyboard_for_menu())
+        context.user_data.clear()
+        return ConversationHandler.END
+
+
+# Конец диалога с переводчиком
+# Начало диалога с синоптиком
+async def city_wether(update, context):
+    await update.message.reply_text("В каком городе желаете узнать погоду?.", reply_markup=get_keyboard_for_text())
+    return 1
+
+
+async def end_wether(update, context):
+    try:
+        city = update.message.text
+        await update.message.reply_html(wether(city), reply_markup=get_keyboard_for_menu())
+        return ConversationHandler.END
+
+    except Exception as error:
+        print(error)
+        await update.message.reply_text(
+            "Соединение с сервером потеряно. Попробуйте ввести корректное название города или подождите немного.",
+            reply_markup=get_keyboard_for_menu())
+        return ConversationHandler.END
+
+
+# Конец диалога с синоптиком
+async def stop(update, context):
+    await update.message.reply_text("Галя, у нас отмена!", reply_markup=get_keyboard_for_menu())
+    return ConversationHandler.END
 
 
 async def echo(update, context):
@@ -144,30 +210,56 @@ async def echo(update, context):
             dest = LANGUAGES[update.message.text.split()[4]]
             text = ' '.join(update.message.text.split()[5:])
 
-            await update.message.reply_text(translator.translate(text, src=src, dest=dest).text)
+            await update.message.reply_text(translator.translate(text, src=src, dest=dest).text,
+                                            reply_markup=get_keyboard_for_menu())
         except Exception as error:
             print(error)
             await update.message.reply_text(
-                "Соединение с сервером потеряно. Попробуйте ввести корректные названия языков или подождите немного")
+                "Соединение с сервером потеряно. Попробуйте ввести корректные названия языков или подождите немного",
+                reply_markup=get_keyboard_for_menu())
 
     elif 'Погода в городе' in update.message.text:
         try:
             city = update.message.text.split('Погода в городе ')[-1]
-            await update.message.reply_html(wether(city))
+            await update.message.reply_html(wether(city), reply_markup=get_keyboard_for_menu())
 
         except Exception as error:
             print(error)
             await update.message.reply_text(
-                "Соединение с сервером потеряно. Попробуйте ввести корректное название города или подождите немного.")
+                "Соединение с сервером потеряно. Попробуйте ввести корректное название города или подождите немного.",
+                reply_markup=get_keyboard_for_menu())
 
 
 def main():
     # Запуск бота.
     application = Application.builder().token(BOT_TOKEN).build()
 
+    db_session.global_init("db/fast_translator.db")
+
     # Регистрация комманд.
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+
+    translation_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('🈳Переводчик🈳'), translation)],
+        states={
+            1: [MessageHandler(filters.TEXT & ~filters.COMMAND, start_language)],
+            2: [MessageHandler(filters.TEXT & ~filters.COMMAND, end_language)],
+            3: [MessageHandler(filters.TEXT & ~filters.COMMAND, end_translation)]
+        },
+        fallbacks=[CommandHandler('stop', stop)]
+    )
+    application.add_handler(translation_handler)
+
+    wether_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('🌦Погода🌦'), city_wether)],
+        states={
+            1: [MessageHandler(filters.TEXT & ~filters.COMMAND, end_wether)]
+        },
+        fallbacks=[CommandHandler('stop', stop)]
+    )
+    application.add_handler(wether_handler)
+
     application.add_handler(MessageHandler(filters.Regex('🙏Помощь🙏'), help_command))
     application.add_handler(MessageHandler(filters.LOCATION, my_wether))
     application.add_handler(MessageHandler(filters.TEXT, echo))
