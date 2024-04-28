@@ -1,5 +1,5 @@
-from telegram.ext import Application, MessageHandler, filters, CommandHandler, ConversationHandler
-from telegram import ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, MessageHandler, filters, CommandHandler, ConversationHandler, CallbackContext
+from telegram import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, Update
 
 from googletrans import Translator
 import math
@@ -46,7 +46,8 @@ LANGUAGES = {
 
 def get_keyboard_for_menu():
     wether_button = KeyboardButton('☀Моя погода☀', request_location=True)
-    my_keboard = ReplyKeyboardMarkup([['🙏Помощь🙏'], [wether_button, '🌦Погода🌦'], ['🈳Переводчик🈳']],
+    reply_keyboard = KeyboardButton('/notification')
+    my_keboard = ReplyKeyboardMarkup([['🙏Помощь🙏'], [wether_button, '🌦Погода🌦'], ['🈳Переводчик🈳'], [reply_keyboard]],
                                      resize_keyboard=True)
     return my_keboard
 
@@ -60,6 +61,13 @@ def get_keyboard_for_translator():
 
 def get_keyboard_for_text():
     my_keboard = ReplyKeyboardMarkup([['/stop']], resize_keyboard=True)
+    return my_keboard
+
+
+def get_keyboard_stop():
+    reply_keyboard = KeyboardButton('/stop')
+    my_keboard = ReplyKeyboardMarkup([[reply_keyboard]], resize_keyboard=True,
+                                     one_time_keyboard=True)
     return my_keboard
 
 
@@ -259,6 +267,61 @@ async def handle_currency_pair(update: Update, context: CallbackContext):
     return ENTER_CURRENCY_PAIR
 
 
+def remove_job_if_exists(name, context):
+    current_jobs = context.job_queue.get_jobs_by_name(name)
+    if not current_jobs:
+        return False
+    for job in current_jobs:
+        job.schedule_removal()
+    return True
+
+
+async def task(context):
+    await context.bot.send_message(context.job.chat_id, text=f'Напомниаю {TEXT}!')
+
+
+async def notification(update, context):
+    await update.message.reply_text("О чем вам напомнить?")
+    return 1
+
+
+async def first_response(update, context):
+    context.user_data['time'] = update.message.text
+    await update.message.reply_text(
+        f'Через сколько секунд вам напомнить "{context.user_data["time"]}"?')
+    # Следующее текстовое сообщение будет обработано
+    # обработчиком states[2]
+    return 2
+
+
+async def second_response(update, context):
+    global TIMER, TEXT
+    time = update.message.text
+    TIMER = int(time)
+    TEXT = context.user_data['time']
+    chat_id = update.effective_message.chat_id
+    context.job_queue.run_once(task, TIMER, chat_id=chat_id, name=str(chat_id), data=TIMER)
+    text = f'Вернусь через {TIMER} c.!'
+    await update.effective_message.reply_text(text, reply_markup=get_keyboard_stop())
+    return ConversationHandler.END
+
+
+async def stop_dialog(update, context):
+    chat_id = update.message.chat_id
+    job_removed = remove_job_if_exists(str(chat_id), context)
+    text = 'Напоминание отменено! Всего доброго!' if job_removed else 'У вас нет активных напоминаний'
+    context.user_data.clear()
+    await update.message.reply_text(text, reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END
+
+
+async def close_keyboard(update, context):
+    await update.message.reply_text(
+        "Ok",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+
 def main():
     # Запуск бота.
     application = Application.builder().token(BOT_TOKEN).build()
@@ -268,6 +331,8 @@ def main():
     # Регистрация комманд.
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("close", close_keyboard))
+    application.add_handler(CommandHandler('stop_dialog', stop_dialog))
 
     translation_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('🈳Переводчик🈳'), translation)],
@@ -291,11 +356,21 @@ def main():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('exchange', exchange_rate_command)],
         states={
-            ENTER_CURRENCY_PAIR: [MessageHandler(Filters.text & ~Filters.command, handle_currency_pair)],
+            ENTER_CURRENCY_PAIR: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_currency_pair)],
         },
         fallbacks=[],
     )
 
+    conver_handler = ConversationHandler(
+        entry_points=[CommandHandler('notification', notification)],
+        states={
+            1: [MessageHandler(filters.TEXT & ~filters.COMMAND, first_response)],
+            2: [MessageHandler(filters.TEXT & ~filters.COMMAND, second_response)]
+        },
+        fallbacks=[CommandHandler('stop_dialog', stop_dialog)]
+    )
+
+    application.add_handler(conver_handler)
     application.add_handler(wether_handler)
     application.add_handler(conv_handler)
     application.add_handler(MessageHandler(filters.Regex('🙏Помощь🙏'), help_command))
