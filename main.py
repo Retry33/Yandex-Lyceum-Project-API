@@ -17,6 +17,8 @@ load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 OpenWeather_TOKEN = os.getenv('OPENWEATHER_TOKEN')
 Geocoder_TOKEN = os.getenv('GEOCODER_TOKEN')
+CURRENCY_TOKEN = os.getenv("CURRENCY_TOKEN")
+ENTER_CURRENCY_PAIR = 0
 
 code_to_smile = {
     "Clear": "Ясно \U00002600",
@@ -230,6 +232,33 @@ async def echo(update, context):
                 reply_markup=get_keyboard_for_menu())
 
 
+# Команда обработки обменного курса
+async def exchange_rate_command(update: Update, context: CallbackContext):
+    await update.message.reply_text("Пожалуйста, введите валютную пару в формате 'USD/RUB':")
+    return ENTER_CURRENCY_PAIR
+
+
+# Обработка ввода пользователем валютной пары
+async def handle_currency_pair(update: Update, context: CallbackContext):
+    try:
+        base_currency, target_currency = update.message.text.split('/')
+        response = requests.get(f'https://v6.exchangerate-api.com/v6/{CURRENCY_TOKEN}/latest/{base_currency}')
+        data = response.json()
+        if data['result'] == 'success':
+            rate = data['conversion_rates'].get(target_currency.upper())
+            if rate:
+                await update.message.reply_text(
+                    f"Текущий курс {base_currency}/{target_currency}: 1 {base_currency} = {rate} {target_currency}")
+                return ConversationHandler.END
+            else:
+                await update.message.reply_text(f"Извините, курс для пары {base_currency}/{target_currency} не найден.")
+        else:
+            await update.message.reply_text("Извините, курсы валют не доступны.")
+    except Exception as e:
+        await update.message.reply_text("Пожалуйста, укажите валютную пару в правильном формате.")
+    return ENTER_CURRENCY_PAIR
+
+
 def main():
     # Запуск бота.
     application = Application.builder().token(BOT_TOKEN).build()
@@ -258,8 +287,17 @@ def main():
         },
         fallbacks=[CommandHandler('stop', stop)]
     )
-    application.add_handler(wether_handler)
 
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('exchange', exchange_rate_command)],
+        states={
+            ENTER_CURRENCY_PAIR: [MessageHandler(Filters.text & ~Filters.command, handle_currency_pair)],
+        },
+        fallbacks=[],
+    )
+
+    application.add_handler(wether_handler)
+    application.add_handler(conv_handler)
     application.add_handler(MessageHandler(filters.Regex('🙏Помощь🙏'), help_command))
     application.add_handler(MessageHandler(filters.LOCATION, my_wether))
     application.add_handler(MessageHandler(filters.TEXT, echo))
