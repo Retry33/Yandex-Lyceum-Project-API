@@ -65,7 +65,7 @@ def get_keyboard_for_text():
 
 
 def get_keyboard_stop():
-    reply_keyboard = KeyboardButton('/stop')
+    reply_keyboard = KeyboardButton('/stop_dialog')
     my_keboard = ReplyKeyboardMarkup([[reply_keyboard]], resize_keyboard=True,
                                      one_time_keyboard=True)
     return my_keboard
@@ -311,7 +311,7 @@ async def stop_dialog(update, context):
     job_removed = remove_job_if_exists(str(chat_id), context)
     text = 'Напоминание отменено! Всего доброго!' if job_removed else 'У вас нет активных напоминаний'
     context.user_data.clear()
-    await update.message.reply_text(text, reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text(text, reply_markup=get_keyboard_for_menu())
     return ConversationHandler.END
 
 
